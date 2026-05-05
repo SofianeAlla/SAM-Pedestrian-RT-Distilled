@@ -20,29 +20,30 @@ scenario-aware MoE-on-edge pattern.
 ### Phase 2 — SAM 3 as 2D oracle for 3D pedestrian supervision (nuScenes mini)
 
 Point-level agreement of SAM-3-derived lidar pseudo-labels vs nuScenes
-3D pedestrian box ground truth, **92 keyframes, 3.2 M lidar points,
-zero human 3D labels used during pseudo-labeling**:
+3D pedestrian box ground truth, **full nuScenes mini (404 keyframes,
+14.0 M lidar points, 47,965 GT pedestrian points), zero human 3D
+labels used during pseudo-labeling**:
 
 | | precision | recall | F1 |
 |---|:-:|:-:|:-:|
-| **Overall** | **0.685** | **0.654** | **0.669** |
-| 0–15 m  | 0.83 | 0.70 | 0.76 |
-| 15–30 m | 0.55 | 0.65 | 0.59 |
-| 30+ m   | 0.34 | 0.35 | 0.34 |
+| **Overall** | **0.662** | **0.670** | **0.666** |
+| 0–15 m  | 0.82 | 0.71 | 0.76 |
+| 15–30 m | 0.46 | 0.63 | 0.53 |
+| 30+ m   | 0.19 | 0.32 | 0.24 |
 
 **Named failure mode** — by camera coverage (how many of 6 cameras saw each lidar point):
 
-| coverage | n points | F1 | comment |
+| coverage | n points    | F1   | comment |
 |---|---:|:-:|---|
-| 0 cams | 3,176,003 | 0.00 | lift physically cannot fire — sensor blind spot |
-| 1 cam  | 16,954    | 0.79 | single-view supervision |
-| 2 cams | 1,091     | 0.86 | multi-view consensus pays off |
+| 0 cams | 13,973,315 | 0.00 | lift physically cannot fire — sensor blind spot |
+| 1 cam  |     50,056 | 0.78 | single-view supervision |
+| 2 cams |      2,837 | 0.84 | multi-view consensus pays off |
 
-**5,433 of 17,135 GT pedestrian points (31.7 %) sit in the union of
+**14,803 of 47,965 GT pedestrian points (30.9 %) sit in the union of
 the under-vehicle blind spot and points outside every camera frustum
 at the keyframe instant.** The lift cannot fire on those by
 construction — this single sensor-config story accounts for the
-entire gap between 0.65 overall recall and 0.96 recall on
+entire gap between 0.67 overall recall and 0.94 recall on
 camera-visible points.
 
 Full writeup: [`docs/RESULTS_PHASE_2.md`](docs/RESULTS_PHASE_2.md).

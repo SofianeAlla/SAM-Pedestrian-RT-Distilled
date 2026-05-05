@@ -11,20 +11,20 @@
 We treat SAM 3 as a 2D oracle, run it on each of the 6 nuScenes cameras
 per keyframe, and project the resulting pedestrian masks onto the lidar
 sweep with multi-camera consensus. Point-level agreement with nuScenes'
-own 3D pedestrian box ground truth, on **92 evaluated keyframes** (3.2 M
-lidar points), with no detector training:
+own 3D pedestrian box ground truth, on the **full nuScenes mini set
+(404 keyframes, 14.0 M lidar points, 47,965 GT pedestrian points)**,
+with no detector training:
 
 | Point-level vs nuScenes 3D ped boxes  | Value         |
 |---------------------------------------|---------------|
-| **Overall precision**                 | **0.685**     |
-| **Overall recall**                    | **0.654**     |
-| **Overall F1**                        | **0.669**     |
+| **Overall precision**                 | **0.662**     |
+| **Overall recall**                    | **0.670**     |
+| **Overall F1**                        | **0.666**     |
 | F1 @ 0-15 m                           | 0.76          |
-| F1 @ 15-30 m                          | 0.59          |
-| F1 @ 30+ m                            | 0.34          |
-| GT pedestrian points                  | 17,135        |
-| Pseudo-positive points                | 16,360        |
-| Total lidar points                    | 3,194,048     |
+| F1 @ 15-30 m                          | 0.53          |
+| F1 @ 30+ m                            | 0.24          |
+| GT pedestrian points                  | 47,965        |
+| Total lidar points                    | 14,026,208    |
 
 Full breakdown in [`outputs/labeling_agreement.json`](../outputs/labeling_agreement.json),
 distance-bin chart in [`outputs/labeling_agreement.png`](../outputs/labeling_agreement.png).
@@ -59,18 +59,18 @@ The diagnostic plot
 [`outputs/failure_mode_coverage.png`](../outputs/failure_mode_coverage.png)
 slices points by **how many cameras saw each lidar point** (0 / 1 / 2+):
 
-| Camera coverage | n points  | n GT pos | F1     | Comment                        |
-|-----------------|-----------|----------|--------|--------------------------------|
-| 0 cameras       | 3,176,003 | 5,433    | **0.00**   | Lift physically cannot fire    |
-| 1 camera        | 16,954    | 10,894   | 0.79   | Single-view supervision        |
-| 2 cameras       | 1,091     | 808      | **0.86** | Multi-view consensus pays off  |
+| Camera coverage | n points     | n GT pos | F1       | Comment                        |
+|-----------------|--------------|----------|----------|--------------------------------|
+| 0 cameras       | 13,973,315   | 14,803   | **0.00** | Lift physically cannot fire    |
+| 1 camera        |     50,056   | 31,124   | 0.78     | Single-view supervision        |
+| 2 cameras       |      2,837   |  2,038   | **0.84** | Multi-view consensus pays off  |
 
-**5,433 of the 17,135 (31.7 %) GT pedestrian points sit in regions that
+**14,803 of the 47,965 (30.9 %) GT pedestrian points sit in regions that
 no camera could see** — the union of the ego-vehicle blind spot
 underneath the sensor rig and points that fall outside every camera's
 frustum at the keyframe timestamp. This *single failure mode* accounts
-for the entire gap between our 0.65 overall recall and the 0.96 recall
-on points visible to a camera.
+for the entire gap between our 0.67 overall recall and the 0.94 recall
+on camera-visible points.
 
 This is a property of the sensor configuration, not the lift quality.
 Three remediation paths fall naturally out of the analysis:
@@ -87,26 +87,25 @@ Three remediation paths fall naturally out of the analysis:
 
 These are explicit follow-ups, not gaps in the present pipeline.
 
-The other distance-axis trend (F1 = 0.34 in the 30 + m bin) is
+The other distance-axis trend (F1 = 0.24 in the 30 + m bin) is
 *expected* and consistent with the camera-coverage story: distant
 points get fewer lidar returns and project to small image regions
 where SAM 3 mask tilt + projection geometry compound.
 
 ## Pipeline behavior (run that produced these numbers)
 
-| Stage                                                    | Wall time   | Output |
-|----------------------------------------------------------|-------------|--------|
-| A — SAM 3 over 92 keyframes × 6 cameras (552 mask files) | ~25 min     | `data/nuscenes_sam3_masks/` |
-| B — lift                                                 | ~3 min      | `data/nuscenes_pseudo_3d/`  |
-| E — labeling agreement                                   | ~1 min      | `outputs/labeling_agreement.{json,png}` |
-| F — 3D viz                                               | ~30 s       | `outputs/demo_3d_panel.png`, `outputs/demo_3d.mp4` |
-| G — failure-mode analysis                                | ~45 s       | `outputs/failure_mode.{json,coverage.png,confidence.png}` |
+| Stage                                                       | Wall time   | Output |
+|-------------------------------------------------------------|-------------|--------|
+| A — SAM 3 over 404 keyframes × 6 cameras (2,424 mask files) | ~2.5 h      | `data/nuscenes_sam3_masks/` |
+| B — lift                                                    | ~7 min      | `data/nuscenes_pseudo_3d/`  |
+| E — labeling agreement                                      | ~3 min      | `outputs/labeling_agreement.{json,png}` |
+| F — 3D viz                                                  | ~30 s       | `outputs/demo_3d_panel.png`, `outputs/demo_3d.mp4` |
+| G — failure-mode analysis                                   | ~3 min      | `outputs/failure_mode.{json,coverage.png,confidence.png}` |
 
-The 92-sample subset was chosen because Stage A on the full 404-sample
-mini takes ~2.5 h on the 4070; the 92-sample run was stopped early
-once the headline numbers had converged. Re-running with the full set
-is mechanical and a good follow-up commit; the qualitative story does
-not change with N.
+A 92-sample preview that this writeup was originally drafted from
+gave overall F1 = 0.669 / blind-spot share 31.7 %. The full 404-sample
+set lands at F1 = 0.666 / blind-spot share 30.9 % — convergent
+qualitatively, marginally lower-N noisy in the per-distance bins.
 
 ## Reproducing
 
