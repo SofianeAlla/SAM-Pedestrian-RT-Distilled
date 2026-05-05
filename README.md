@@ -1,59 +1,77 @@
-# Pedestrian Expert (SAM 3-distilled, real-time)
+# SAM 3 Pedestrian — Real-time distillation reference implementation
 
-A real-time pedestrian detector + segmenter, distilled from SAM 3.
-Runs on the user's RTX 4070 Laptop today (desktop-edge prototype);
-the same pipeline ports to NVIDIA Jetson Orin AGX when that hardware
-is available.
+A reproducible, end-to-end recipe for distilling Meta's
+[SAM 3](https://github.com/facebookresearch/sam3) into real-time
+on-device perception models for the **pedestrian** class. Built and
+verified on a single consumer NVIDIA laptop GPU (RTX 4070, 8 GB).
 
-This is **expert #1** of a future Mixture-of-Experts foundation
-perception model. Each subsequent class (vehicle, cyclist, sign, lane,
-drivable area, long-tail) clones the same recipe — SAM 3 cloud teacher,
-tiny edge student, shared backbone — so that runtime cost stays cheap
-as the expert pool grows. EMC2 (ICCV 2025) is the closest published
-prior art for the scenario-aware MoE-on-edge pattern.
+This repository is a **public reference implementation** for engineers
+wiring SAM 3 (or any concept-prompted 2D foundation model) into their
+own perception data pipelines. The pedestrian class is treated as
+*expert #1* of a future Mixture-of-Experts perception stack — each
+subsequent class (vehicle, cyclist, sign, lane, drivable area, long-tail)
+clones the same recipe, so adding experts does not scale runtime cost.
+EMC2 (ICCV 2025) is the closest published prior art for the
+scenario-aware MoE-on-edge pattern.
 
-## Status
+## Phases
 
-- **Phase 1 (shipped)**: 2D camera-only pedestrian detector +
-  segmenter, distilled from SAM 3. v1→v2 redesign in commit history.
-- **Phase 2 (in progress)**: SAM 3 as 2D oracle → 3D pedestrian
-  supervision on nuScenes mini → PointPillars student. Locked plan in
-  [`docs/PHASE_2_PLAN.md`](docs/PHASE_2_PLAN.md). Project moved off
-  OneDrive to `C:\dev\SAM-Pedestrian-RT-Distilled\` so checkpoint
-  writes don't fight a sync daemon.
+- **Phase 1 — 2D camera distillation (shipped)**: SAM 3 →
+  YOLOv8n-Seg student, real-time on consumer GPU. Includes a v1→v2
+  redesign in the commit history that fixes a data-leakage trap (the
+  v1 pipeline trained on frames that were also used in the demo
+  evaluation; v2 separates train/val/demo into disjoint sources).
+- **Phase 2 — 3D supervision via 2D oracle (in progress)**: SAM 3 over
+  the 6 nuScenes cameras → camera-lidar projection → multi-view
+  consensus → per-point 3D pedestrian pseudo-labels → optional
+  PointPillars student. Plan in
+  [`docs/PHASE_2_PLAN.md`](docs/PHASE_2_PLAN.md), results in
+  [`docs/RESULTS_PHASE_2.md`](docs/RESULTS_PHASE_2.md).
 
 ---
 
 ## What's in here
 
 ```
+docs/
+  PHASE_2_PLAN.md            3D supervision via 2D oracle on nuScenes
+  RESULTS_PHASE_2.md         Numbers + named failure mode
+
+# Phase 1 — 2D camera distillation
 teacher/
-  sam3_autolabel.py        SAM 3 → YOLO-Seg pseudo-labels
-  pseudolabel_filter.py    Drop pedestrian-on-bicycle false positives
-  carla_synth.py           CARLA pedestrian capture (overnight)
+  sam3_autolabel.py          SAM 3 → YOLO-Seg pseudo-labels
+  pseudolabel_filter.py      Drop pedestrian-on-bicycle false positives
+  carla_synth.py             CARLA pedestrian capture (optional)
 distill/
-  configs/ped_yolov8n.yaml Training config
-  train.py                 YOLOv8n-Seg fine-tune on SAM 3 labels
+  configs/ped_yolov8n.yaml   Training config
+  train.py                   YOLOv8n-Seg fine-tune on SAM 3 labels
 runtime/
-  pedestrian_expert.py     Inference wrapper + Expert plugin contract
-  export_onnx.py           PyTorch → ONNX
-  build_trt.py             ONNX → desktop TensorRT engine
-  demo_live.py             Video / webcam → annotated MP4
+  pedestrian_expert.py       Inference wrapper + Expert plugin contract
+  export_onnx.py             PyTorch → ONNX
+  build_trt.py               ONNX → desktop TensorRT engine
+  demo_live.py               Video / webcam → annotated MP4
 eval/
-  benchmark.py             Latency + throughput on local GPU
+  benchmark.py               Latency + throughput on local GPU
 scripts/
-  setup.sh                 Install + sanity check
-  fetch_sample_video.py    Pull a CC sample driving video
-  run_smoke.sh             Tiny end-to-end run (~30-60 min)
-  run_full.sh              Overnight full corpus + epochs
-data/
-  seed_images/             User-supplied real driving images
-  sample_videos/           Demo input
-  pseudo_labels/           SAM 3 output (gitignored)
-outputs/
-  demo_baseline.mp4        Baseline YOLOv8n-Seg COCO demo
-  demo_smoke.mp4           After SAM 3 distillation (smoke run)
-  demo_full.mp4            After overnight full training
+  setup.sh                   Install + sanity check
+  fetch_sample_video.py      Pull a CC sample driving video
+  build_coco_person_subset.py
+  build_distill_dataset.py
+  run_smoke.sh               Tiny end-to-end run (~30-60 min)
+  run_1h_v2.sh               Diversified ~1 h training run
+  run_full.sh                Overnight full corpus + epochs
+
+# Phase 2 — 3D supervision via 2D oracle (nuScenes mini)
+teacher/
+  nuscenes_sam3_oracle.py    SAM 3 over the 6 nuScenes cameras (Stage A)
+  lidar_lift.py              Project masks onto lidar points (Stage B)
+eval/
+  labeling_agreement.py      Point-level P/R/F1 vs nuScenes GT (Stage E)
+  viz_3d.py                  3-panel viz + rotating BEV flythrough (Stage F)
+  failure_mode.py            By-camera-coverage + confidence breakdown (Stage G)
+scripts/
+  fetch_nuscenes_mini.py     One-time nuScenes mini downloader
+  run_phase2.sh              End-to-end Phase 2 orchestrator
 ```
 
 ## Setup
