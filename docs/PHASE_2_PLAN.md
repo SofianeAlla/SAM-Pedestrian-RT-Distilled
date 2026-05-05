@@ -1,30 +1,44 @@
-# Phase 2 — SAM 3 as 2D oracle for 3D pedestrian supervision (nuScenes mini)
+# Phase 2 — SAM 3 as a 2D oracle for 3D pedestrian supervision (nuScenes mini)
 
 ## Why this phase
 
-Phase 1 shipped a 2D camera-only pedestrian segmenter distilled from
-SAM 3, real-time on the RTX 4070 Laptop. For a 3D ML conversation
-(specifically: Zoox application), 2D camera output is not the
-deliverable — Zoox runs on point clouds. Phase 2 turns Phase 1 from a
-camera demo into a *3D* deliverable by treating SAM 3 as a 2D oracle
-that bootstraps supervision for a lidar-native student.
+Phase 1 shipped a 2D camera-only pedestrian detector + segmenter,
+distilled from SAM 3, real-time on consumer GPU hardware. For an
+autonomous-driving perception stack, the deliverable is *3D* — point
+clouds with 3D bounding boxes, not image-space masks. Phase 2 turns
+the Phase 1 pipeline into a 3D one by treating SAM 3 as a **2D oracle
+that bootstraps supervision for a lidar-native student**, with no
+human-labeled 3D boxes used in training.
 
-This phase is intentionally scoped to a **single end-to-end run with
-one set of numbers + a 3D viz**, not a paper-grade ablation. It is the
-laptop-feasible version of the SAM-as-2D-oracle direction (SAMesh,
-Seal, OpenMask3D, OV-3DET in spirit).
+This is a concrete, end-to-end recipe for the open question: *can a
+2D foundation model with text prompting carry enough scene
+understanding to supervise 3D pedestrian detection in a self-driving
+setting?* The answer matters because human 3D box labels are the
+single most expensive line item in AV perception data pipelines.
+
+The architectural pattern is in the same family as
+[SAMesh](https://arxiv.org/abs/2407.16692) (object-centric SAM-to-mesh),
+[Seal](https://arxiv.org/abs/2306.09347) (CVPR 2024 — SAM-supervised
+3D point cloud features), [OpenMask3D](https://arxiv.org/abs/2306.13631)
+and [OV-3DET](https://arxiv.org/abs/2304.00788) — but specialized to:
+- the AV outdoor-scene regime (sparse, dynamic, multi-view lidar);
+- using **SAM 3** (Nov 2025) rather than SAM 1/2 + GroundingDINO,
+  which simplifies the prompt-→-mask path to a single concept-prompted
+  call;
+- a single fully-laptop-runnable training run, no cloud GPUs.
 
 ## Locked decisions
 
 - **Dataset**: nuScenes **mini** (10 scenes, ~400 keyframes, 6 cams +
   lidar, 4 GB on disk). Official `nuscenes-devkit` for I/O and eval.
-  No KITTI in this round (cross-dataset eval is a follow-up).
 - **Compute**: laptop only — RTX 4070 Laptop, 8 GB VRAM, FP16.
-- **Project root**: `C:\dev\SAM-Pedestrian-RT-Distilled\`.
-  Off OneDrive to avoid sync conflicts on intermediate checkpoints.
-- **Out**: ablation tables (no SAM 3 vs SAM 2 vs GroundingDINO+SAM
-  comparisons, no aug/LR sweeps, no fine-tune-with-GT row).
-  One pipeline, one model, one set of numbers.
+- **Project root**: `C:\dev\SAM-Pedestrian-RT-Distilled\` (off
+  OneDrive to avoid sync conflicts on intermediate checkpoints).
+- **Out of scope for this phase**: ablation tables (no SAM 3 vs SAM 2
+  vs GroundingDINO+SAM rows, no aug/LR sweeps, no fine-tune-with-GT
+  comparisons). One pipeline, one model, one set of numbers + one
+  named failure mode. Cross-dataset eval, tracking, multi-class,
+  fusion, and the MoE router are all explicit follow-ups.
 
 ## Pipeline
 
@@ -38,14 +52,14 @@ For each keyframe:
 4. Reuse `teacher.pseudolabel_filter` to drop pedestrian-on-bicycle
    false positives per camera.
 
-Compute budget: ~400 keyframes × 6 cams × ~1.5 s = **~60 min** total
+Compute budget: ~400 keyframes × 6 cams × ~1.5 s ≈ **~60 min** total
 on the 4070, one-time cost. Cached so subsequent training is free.
 
 ### Stage B — 2D→3D lift via camera-lidar projection
 For each keyframe lidar sweep:
 1. For each lidar point P, project into each of the 6 camera frames
    using `nuscenes-devkit` calibration (intrinsic + extrinsic +
-   ego-motion compensation).
+   ego-motion compensation between sweep and image timestamps).
 2. If P projects inside a SAM 3 pedestrian mask in camera C with
    score s, accumulate a soft label
    `confidence_C = s * geometry_factor(P, C)` where the geometry
@@ -53,9 +67,6 @@ For each keyframe lidar sweep:
 3. Multi-camera consensus: a point is labeled pedestrian iff at least
    one camera's confidence exceeds `tau` (default 0.5). Final
    per-point confidence = max across cameras.
-4. Optional temporal aggregation: ±2 sweeps (so a partially-seen
-   pedestrian in a single sweep gets reinforced by neighbors). Off by
-   default in this phase to keep the pipeline tight.
 
 Output: per-keyframe lidar tensor `(N, 4)` + per-point label tensor
 `(N,)` with values `{0=non-ped, 1=pedestrian}` and a confidence
@@ -63,36 +74,58 @@ Output: per-keyframe lidar tensor `(N, 4)` + per-point label tensor
 
 ### Stage C — PointPillars 3D pedestrian detector (student)
 - Architecture: PointPillars (voxel CNN), single-class pedestrian
-  head. ~3-5 M params. Use the standard `mmdet3d` or `OpenPCDet`
-  config as a baseline; minimal modifications.
+  head. ~3-5 M params. Standard config from `OpenPCDet` or `mmdet3d`.
 - Training: SAM-3-derived pseudo-labels (Stage B output) as
-  supervision. Single training config (no sweeps).
-- Hardware budget: 50 epochs on nuScenes mini, batch 4, ~3-4 hours
-  on the 4070.
+  supervision. Single training config — no sweeps.
+- Hardware budget: ~50 epochs on nuScenes mini, batch 4, ~3-4 h on
+  the 4070.
+- Mirrors the `Expert` Protocol from `runtime/pedestrian_expert.py`
+  so the 3D student plugs into the same future-MoE substrate as the
+  2D Phase 1 student.
 
-### Stage D — Eval
-Single set of numbers, official nuScenes eval (`nuscenes-devkit`
-`evaluate.py`):
+### Stage D — Eval (one set of numbers)
+Single set of headline numbers via the official `nuscenes-devkit`
+eval pipeline:
 - **Pedestrian mAP** at 0.5 / 1.0 / 2.0 / 4.0 m thresholds.
 - **NDS** (nuScenes detection score) — the official aggregate metric.
-- Per-distance recall: 0-15 m, 15-30 m, 30+ m. Free side-product of
-  the eval; a sentence-long failure-mode story for the interview.
+- **Per-distance recall**: 0-15 m / 15-30 m / 30+ m, free side-product
+  of the eval run; useful for the failure-mode analysis below.
 
-### Stage E — 3D viz (the conversation starter)
+### Stage E — Labeling-agreement check (no detector required)
+A second, complementary number that tests the *lift itself*, not the
+downstream detector:
+- For each held-out nuScenes keyframe, project the dataset's 3D
+  pedestrian boxes into the lidar sweep to get per-point GT labels.
+- Compare against the Stage B SAM-3-derived per-point labels.
+- Report point-level precision, recall, F1.
+- This metric is meaningful at mini-scale even if Stage C's mAP isn't
+  (mini is too small for a stable mAP), so it stands alone if Stage C
+  is skipped.
+
+### Stage F — 3D viz
 - Render one held-out keyframe with:
   - Lidar points colored by class (gray = non-ped, orange = ped).
   - Predicted 3D bounding boxes from PointPillars.
-  - Optional: SAM 3 camera mask overlaid on the same keyframe's
-    front camera, side-by-side.
-- Save as a 10-15 s video sweeping the camera around the scene.
-- Path: `outputs/demo_3d.mp4`. This is the artifact you open the
-  Zoox conversation with.
+  - SAM 3 camera mask overlaid on the same keyframe's front camera,
+    side-by-side panel.
+- Save as a 10-15 s rotating-camera flythrough.
+- Path: `outputs/demo_3d.mp4`.
+
+### Stage G — Named failure mode
+Pick one specific, diagnosable failure of the lift on the held-out
+set. Examples we expect to find:
+- Heavily-occluded pedestrians where 4+ cameras see only the
+  occluder, multi-cam consensus misses.
+- Calibration-drift bias in long-range projections beyond ~25 m.
+- Blind-spot pedestrians under the ego vehicle that no camera sees.
+Document with a diagnostic plot in `docs/FAILURE_MODES.md`.
 
 ## Implementation surface (additive on Phase 1)
 
 ```
 docs/
   PHASE_2_PLAN.md                  this file
+  RESULTS_PHASE_2.md               numbers + failure mode (lands when Stage E/F done)
 data/
   nuscenes/                        nuScenes mini extracted (gitignored)
   nuscenes_sam3_masks/             SAM 3 mask cache (gitignored)
@@ -109,46 +142,52 @@ distill/
   train_3d.py                      Stage C training driver
 eval/
   nuscenes_eval.py                 Stage D official nuScenes eval
-  viz_3d.py                        Stage E lidar + box rendering
+  labeling_agreement.py            Stage E lift-only metric
+  viz_3d.py                        Stage F lidar + box rendering
 scripts/
   fetch_nuscenes_mini.py           one-time download helper
   run_phase2.sh                    end-to-end orchestrator
 ```
 
 External deps to add:
-- `nuscenes-devkit` (official I/O + eval)
-- `mmdet3d` *or* `OpenPCDet` (PointPillars implementation; pick one
-  based on Windows installability — `OpenPCDet` is usually friendlier)
-- `open3d` (Stage E viz)
+- `nuscenes-devkit` — official I/O + eval
+- `OpenPCDet` *or* `mmdet3d` — PointPillars implementation
+- `open3d` — Stage F viz
 
-## Single end-to-end run plan
+## End-to-end run plan
 
 Approximate wall time on the RTX 4070 Laptop, 8 GB:
-- Stage A (SAM 3 over 2,400 images):     ~60 min
-- Stage B (lift + cache):                ~10 min
-- Stage C (PointPillars 50 epochs):      ~3-4 h
-- Stage D (eval):                        ~5 min
-- Stage E (viz render):                  ~5 min
-- **Total: ~5 hours**, suitable for one focused session.
+
+| Stage                                          | Wall time     |
+|------------------------------------------------|---------------|
+| A (SAM 3 over ~2,400 keyframe-camera images)   | ~60 min       |
+| B (lift + cache)                               | ~10 min       |
+| E (labeling agreement, runs on B output)       | ~5 min        |
+| C (PointPillars 50 epochs)                     | ~3-4 h        |
+| D (nuScenes eval)                              | ~5 min        |
+| F (viz render)                                 | ~5 min        |
+| G (failure-mode diagnostic + plot)             | ~30 min       |
+| **Total end-to-end**                           | **~5 h**      |
+
+Stage E gives us a meaningful number even if C is delayed, so it is
+the minimum publishable cut.
 
 ## What this is NOT
 
-- Not a paper. No ablation table.
-- Not SOTA. nuScenes mini is too small; the headline number is "did
-  the SAM-3-as-3D-oracle pipeline produce a non-trivial nuScenes
-  pedestrian mAP from a laptop run with no human 3D labels?"
-- Not multi-class, not multi-frame tracking, not fusion. Pedestrian
-  only, single-frame, lidar-only student, 6-cam supervision.
+- Not a SOTA paper. nuScenes mini is too small for a stable headline
+  mAP; Stage E's labeling-agreement metric is the more honest one at
+  this scale.
+- Not multi-class, not multi-frame tracking, not camera+lidar fusion
+  in the student. Pedestrian only, single-frame, lidar-only student,
+  6-camera supervision.
+- Not a SAM-3-vs-SAM-2 ablation. That's the natural next-step paper.
 
-## Conversation framing for Zoox
+## Why a public reference implementation
 
-Open with the v1→v2→Phase 2 progression as a *learning* artifact:
-
-> "I built a SAM 3 → 2D camera segmenter, caught my own data leakage
-> in v1, fixed it in v2, then realized 2D wasn't the right deliverable
-> for 3D ML and pivoted to using SAM 3 as a 2D oracle that supervises
-> a PointPillars student on nuScenes lidar. Here's the 3D output and
-> the nuScenes mAP. Now ask me what's wrong with my approach."
-
-The mistakes (leakage, head reset, latency regression) are part of
-the story. Strong candidates make and catch their own errors visibly.
+Foundation-model-supervised 3D perception is an active research area
+but most work targets either (a) static indoor scenes (OpenMask3D
+class) or (b) generic 3D semantic segmentation with SAM 1/2 (Seal
+class). A reproducible **AV-pedestrian, SAM 3, laptop-runnable**
+recipe doesn't exist publicly at the time of this writing. The repo
+is meant to fill that gap for engineers who want to wire SAM 3 into
+their own perception data pipelines without reading 8 papers first.
