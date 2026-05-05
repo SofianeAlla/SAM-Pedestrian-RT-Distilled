@@ -90,6 +90,25 @@ bash scripts/run_full.sh
 100 epochs, larger batch, ONNX export, desktop TensorRT build,
 benchmark + final `outputs/demo_full.mp4`.
 
+## One-paragraph summary (presentation copy)
+
+**SAM 3-distilled real-time pedestrian expert.** A working desktop-edge
+pedestrian detector + segmenter, distilled from Meta's SAM 3 (840M-param
+concept-prompted teacher), built as expert #1 of a future Mixture-of-
+Experts foundation perception model for autonomous-vehicle vision. The
+pipeline runs entirely on a single RTX 4070 Laptop (8 GB): SAM 3
+generates pseudo-labels with person-on-foot text prompts (negatively
+prompted against cyclists/scooters/wheelchairs to keep the future MoE
+class boundary clean); a YOLOv8n-Seg student is fine-tuned on those
+labels and exported to TensorRT. End-to-end real-time inference on a
+647-frame driving video clocks in at **56 FPS / 15.4 ms mean inference
+latency** (det + seg head, FP16, single front camera, 768×432 input).
+The architecture follows EMC2 (ICCV 2025) — backbone outputs a shared
+P3/P4/P5 feature pyramid and the student is a class-specialized head,
+so adding the next expert (vehicles, signs, lanes) is a head + a SAM 3
+prompt set rather than a rewrite, and runtime cost stays cheap as the
+expert pool grows under sparse top-k routing.
+
 ## Performance
 
 Sample video: `person-bicycle-car-detection.mp4` (Intel sample-videos),
