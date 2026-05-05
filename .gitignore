@@ -18,9 +18,11 @@ env/
 *.bin
 *.safetensors
 checkpoints/
-# Allow the smoke-run student weights as a deliverable for downstream use.
+# Allow the smoke-run + 1h-run student weights as deliverables for downstream use.
 !runs/segment/runs/ped_smoke/weights/
 !runs/segment/runs/ped_smoke/weights/best.pt
+!runs/segment/runs/ped_1h/weights/
+!runs/segment/runs/ped_1h/weights/best.pt
 
 # Data (large; user supplies)
 data/cityscapes/
@@ -32,14 +34,21 @@ data/carla_synth/
 data/seed_images/*.jpg
 data/seed_images/*.png
 data/seed_images/*.jpeg
+data/seed_images_full/
 data/pseudo_labels/
+data/pseudo_labels_train/
+data/pseudo_labels_val/
+data/coco_person/
+data/coco_distill/
 
 # Outputs (intermediate results, not demos — demos are deliverables)
 outputs/*.npy
+outputs/*.log
 outputs/runs/
 # Demo videos ARE deliverables; keep them in git despite mp4 size.
 !outputs/demo_baseline.mp4
 !outputs/demo_smoke.mp4
+!outputs/demo_1h.mp4
 !outputs/demo_full.mp4
 
 # Editor / OS

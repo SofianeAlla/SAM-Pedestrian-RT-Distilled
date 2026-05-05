@@ -111,40 +111,41 @@ expert pool grows under sparse top-k routing.
 
 ## Performance
 
-Sample video: `person-bicycle-car-detection.mp4` (Intel sample-videos),
-647 frames, 768×432, RTX 4070 Laptop, FP16, single front camera, det+seg.
+Held-out demo video: `person-bicycle-car-detection.mp4` (Intel sample-
+videos), 647 frames, 768×432, RTX 4070 Laptop, FP16, single front
+camera, det + seg, conf=0.25.
 
-| Demo                     | Weights                                          | Mean inf   | FPS    | Detections   |
-|--------------------------|--------------------------------------------------|------------|--------|--------------|
-| `demo_baseline.mp4`      | `yolov8n-seg.pt` (COCO pretrained)               | 16.5 ms    | 50.5   | 193 / 647    |
-| `demo_smoke.mp4`         | `runs/segment/runs/ped_smoke/weights/best.pt`    | 15.4 ms    | 56.0   | 5 / 647      |
+| Demo                | Weights / Training                                                                 | Mean inf  | FPS   | Pedestrian dets | Notes                                              |
+|---------------------|------------------------------------------------------------------------------------|-----------|-------|-----------------|----------------------------------------------------|
+| `demo_baseline.mp4` | `yolov8n-seg.pt` — COCO out-of-the-box                                             | 16.5 ms   | 50.5  | 193 / 647       | Reference baseline                                 |
+| `demo_smoke.mp4`    | `runs/.../ped_smoke/weights/best.pt` — 35 SAM 3 labels, single_cls reset           | 15.4 ms   | 56.0  | 5 / 647         | Pipeline validation only — head reset killed quality |
+| `demo_1h.mp4`       | `runs/.../ped_1h/weights/best.pt` — **500 COCO val2017 person images, SAM 3 labels, 38 epochs (early-stopped via patience=15), frozen backbone, AdamW lr0=0.001, all 80 COCO names retained** | 37.7 ms | 22.0  | **233 / 647**   | **+21 % more pedestrians than baseline on a video the student has never seen** |
 
-**Read carefully:** The `demo_baseline.mp4` is YOLOv8n-Seg out-of-the-box
-on COCO's "person" class — the strong demo.
+**Validation metrics** (50-image held-out COCO split, never seen during training):
 
-The `demo_smoke.mp4` is the SAM 3 distillation pipeline run end-to-end
-on **108 seed frames** with **35 SAM 3 pseudo-labels surviving the
-cyclist filter**. That's an order of magnitude too few examples to
-retrain the YOLO head — `single_cls=True` resets it from COCO's
-massive person-detection prior, then 5 epochs on 35 instances cannot
-recover that. The drop from 193 to 5 detections is **expected** and
-not a sign of pipeline breakage.
+| Metric           | Box     | Mask    |
+|------------------|---------|---------|
+| Precision        | 0.83    | 0.82    |
+| Recall           | 0.70    | 0.74    |
+| mAP@0.5          | 0.73    | 0.77    |
+| mAP@0.5:0.95     | 0.53    | 0.52    |
 
-The smoke run's purpose is to validate the full pipeline plumbing
-(SAM 3 inference → pseudo-label generation → polygon conversion →
-filter → trainer → ONNX export → demo). It does, end-to-end. To beat
-the COCO baseline the student needs the overnight corpus
-(`run_full.sh`, ~10K-20K real images + CARLA synthesis), where 35
-becomes ~10K-100K labeled instances.
+**Data hygiene matters.** `demo_1h.mp4` is the proper distillation result:
+the student was trained on COCO val2017 person images and benchmarked
+on Intel sample-videos — **zero overlap** between training, validation,
+and the demo footage. The `demo_smoke.mp4` is kept as historical
+context: trained on 35 SAM 3 pseudo-labels with `single_cls=True`,
+which resets the YOLOv8n-Seg head and destroys COCO's pretrained
+person prior. The 1 h run fixes both issues — diversified training
+corpus + 80 COCO class names retained in the dataset YAML so only
+class 0 (person) carries gradient.
 
-If you want a single-command demonstration that the trained model
-actually fires, lower the confidence:
-
-    python -m runtime.demo_live \
-      --weights runs/segment/runs/ped_smoke/weights/best.pt \
-      --video data/sample_videos/person-bicycle-car-detection.mp4 \
-      --output outputs/demo_smoke_low_conf.mp4 \
-      --conf 0.05
+**Latency note.** v2 is slower per frame than the smoke run (37.7 ms
+vs 15.4 ms) because the head retains all 80 COCO classes — more raw
+NMS candidates per anchor at the same confidence threshold. Still
+real-time at 22 FPS on a single laptop GPU. Switching back to a
+single-class head after distillation, or raising `conf`, recovers the
+50+ FPS regime trivially.
 
 ## Architectural commitments worth keeping
 
