@@ -53,6 +53,14 @@ outputs/runs/
 !outputs/demo_smoke.mp4
 !outputs/demo_1h.mp4
 !outputs/demo_full.mp4
+!outputs/demo_3d.mp4
+# Phase 2 result plots + json are deliverables.
+!outputs/labeling_agreement.json
+!outputs/labeling_agreement.png
+!outputs/failure_mode.json
+!outputs/failure_mode_coverage.png
+!outputs/failure_mode_confidence.png
+!outputs/demo_3d_panel.png
 
 # Editor / OS
 .idea/
