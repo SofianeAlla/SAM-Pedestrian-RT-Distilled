@@ -40,6 +40,9 @@ data/pseudo_labels_train/
 data/pseudo_labels_val/
 data/coco_person/
 data/coco_distill/
+data/nuscenes/
+data/nuscenes_sam3_masks/
+data/nuscenes_pseudo_3d/
 
 # Outputs (intermediate results, not demos — demos are deliverables)
 outputs/*.npy
