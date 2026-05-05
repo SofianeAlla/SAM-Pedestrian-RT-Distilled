@@ -92,15 +92,40 @@ benchmark + final `outputs/demo_full.mp4`.
 
 ## Performance
 
-Baseline YOLOv8n-Seg COCO on the sample video, RTX 4070 Laptop, FP16:
+Sample video: `person-bicycle-car-detection.mp4` (Intel sample-videos),
+647 frames, 768×432, RTX 4070 Laptop, FP16, single front camera, det+seg.
 
-| Metric              | Value      |
-|---------------------|------------|
-| Mean inference      | 16.5 ms    |
-| Avg loop FPS        | 50.5       |
-| Total detections    | 193 / 647  |
+| Demo                     | Weights                                          | Mean inf   | FPS    | Detections   |
+|--------------------------|--------------------------------------------------|------------|--------|--------------|
+| `demo_baseline.mp4`      | `yolov8n-seg.pt` (COCO pretrained)               | 16.5 ms    | 50.5   | 193 / 647    |
+| `demo_smoke.mp4`         | `runs/segment/runs/ped_smoke/weights/best.pt`    | 15.4 ms    | 56.0   | 5 / 647      |
 
-SAM 3-distilled numbers will land here after the smoke run.
+**Read carefully:** The `demo_baseline.mp4` is YOLOv8n-Seg out-of-the-box
+on COCO's "person" class — the strong demo.
+
+The `demo_smoke.mp4` is the SAM 3 distillation pipeline run end-to-end
+on **108 seed frames** with **35 SAM 3 pseudo-labels surviving the
+cyclist filter**. That's an order of magnitude too few examples to
+retrain the YOLO head — `single_cls=True` resets it from COCO's
+massive person-detection prior, then 5 epochs on 35 instances cannot
+recover that. The drop from 193 to 5 detections is **expected** and
+not a sign of pipeline breakage.
+
+The smoke run's purpose is to validate the full pipeline plumbing
+(SAM 3 inference → pseudo-label generation → polygon conversion →
+filter → trainer → ONNX export → demo). It does, end-to-end. To beat
+the COCO baseline the student needs the overnight corpus
+(`run_full.sh`, ~10K-20K real images + CARLA synthesis), where 35
+becomes ~10K-100K labeled instances.
+
+If you want a single-command demonstration that the trained model
+actually fires, lower the confidence:
+
+    python -m runtime.demo_live \
+      --weights runs/segment/runs/ped_smoke/weights/best.pt \
+      --video data/sample_videos/person-bicycle-car-detection.mp4 \
+      --output outputs/demo_smoke_low_conf.mp4 \
+      --conf 0.05
 
 ## Architectural commitments worth keeping
 

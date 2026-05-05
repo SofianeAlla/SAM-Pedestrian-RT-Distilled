@@ -135,14 +135,16 @@ class PedestrianExpert:
         else:
             mask_arr = None
 
+        # If the model is a single-class model (typical for our distilled
+        # student via single_cls=True), every detection is pedestrian by
+        # definition — Ultralytics labels it "item" internally. Otherwise
+        # filter to person/pedestrian classes.
+        is_single_class = len(self._model.names) == 1
+
         for i in range(len(xyxy)):
             cid = int(classes[i])
-            # Single-class model: only emit pedestrian. If multi-class
-            # weights were loaded by mistake, filter to "person" class id.
-            if self._model.names.get(cid, "").lower() not in {
-                "pedestrian",
-                "person",
-            }:
+            cname = self._model.names.get(cid, "").lower()
+            if not is_single_class and cname not in {"pedestrian", "person"}:
                 continue
             m = None
             if mask_arr is not None and i < len(mask_arr):
@@ -153,7 +155,9 @@ class PedestrianExpert:
                     score=float(confs[i]),
                     mask=m,
                     class_id=cid,
-                    class_name=self._model.names.get(cid, "pedestrian"),
+                    class_name=(
+                        "pedestrian" if is_single_class else self._model.names.get(cid, "pedestrian")
+                    ),
                 )
             )
 

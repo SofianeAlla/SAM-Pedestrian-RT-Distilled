@@ -128,64 +128,78 @@ def run_sam3_on_image(
     image_bgr: np.ndarray,
     positive_prompts: tuple[str, ...],
     threshold: float,
+    mask_threshold: float = 0.5,
 ) -> list[tuple[np.ndarray, float, str]]:
-    """Run SAM 3 with each positive prompt; return (mask, score, prompt) per detection."""
+    """Run SAM 3 with each positive prompt; return (mask, score, prompt) per detection.
+
+    Uses processor.post_process_instance_segmentation for clean
+    box/mask/score tuples per text concept.
+    """
     import torch
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    h, w = image_rgb.shape[:2]
     detections: list[tuple[np.ndarray, float, str]] = []
 
     for prompt in positive_prompts:
         try:
             inputs = processor(
                 images=image_rgb, text=prompt, return_tensors="pt"
-            ).to(device)
+            ).to(device, dtype=torch.float16)
+            # Keep input_ids and attention_mask in long.
+            for k in ("input_ids", "attention_mask"):
+                if k in inputs:
+                    inputs[k] = inputs[k].to(dtype=torch.long)
             with torch.no_grad():
                 outputs = model(**inputs)
+
+            results = processor.post_process_instance_segmentation(
+                outputs,
+                threshold=threshold,
+                mask_threshold=mask_threshold,
+                target_sizes=[(h, w)],
+            )
         except Exception as e:
             print(f"    prompt '{prompt}': {type(e).__name__}: {e}")
             continue
 
-        # SAM 3 outputs vary by version; defensively handle a few shapes.
-        masks = getattr(outputs, "pred_masks", None)
-        scores = getattr(outputs, "iou_scores", None)
-        if masks is None:
-            masks = getattr(outputs, "masks", None)
-        if scores is None:
-            scores = getattr(outputs, "scores", None)
-
-        if masks is None:
+        if not results:
+            continue
+        per_image = results[0]
+        masks_t = per_image.get("masks")
+        scores_t = per_image.get("scores")
+        if masks_t is None or scores_t is None or len(scores_t) == 0:
             continue
 
-        masks_np = masks.float().cpu().numpy()
-        scores_np = (
-            scores.float().cpu().numpy()
-            if scores is not None
-            else np.ones(masks_np.shape[:2])
-        )
+        masks_np = masks_t.cpu().numpy()
+        scores_np = scores_t.cpu().numpy()
 
-        # Flatten to per-mask iteration regardless of (B, N, H, W) vs (N, H, W).
-        if masks_np.ndim == 4:
-            masks_np = masks_np[0]
-            scores_np = scores_np[0] if scores_np.ndim > 1 else scores_np
-
-        for i in range(masks_np.shape[0]):
-            score = (
-                float(scores_np[i])
-                if scores_np.ndim > 0 and i < len(np.atleast_1d(scores_np))
-                else 1.0
-            )
-            if score < threshold:
-                continue
+        for i in range(len(scores_np)):
             m = masks_np[i]
             if m.ndim == 3:
                 m = m[0]
-            m_bin = (m > 0.0).astype(np.uint8)
+            m_bin = (m > 0).astype(np.uint8)
             if m_bin.sum() < 50:
                 continue
-            detections.append((m_bin, score, prompt))
+            detections.append((m_bin, float(scores_np[i]), prompt))
 
-    return detections
+    # Deduplicate: same object often hit by multiple prompts. Keep the
+    # highest-scoring detection per IoU>0.6 cluster.
+    if len(detections) <= 1:
+        return detections
+    detections.sort(key=lambda d: -d[1])
+    kept: list[tuple[np.ndarray, float, str]] = []
+    for cand_mask, cand_score, cand_prompt in detections:
+        is_dup = False
+        for kept_mask, _, _ in kept:
+            inter = np.logical_and(cand_mask, kept_mask).sum()
+            union = np.logical_or(cand_mask, kept_mask).sum()
+            if union > 0 and inter / union > 0.6:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append((cand_mask, cand_score, cand_prompt))
+    return kept
 
 
 def main() -> int:

@@ -19,6 +19,8 @@ env/
 *.safetensors
 checkpoints/
 weights/
+# Allow the smoke-run student weights as a deliverable for downstream use.
+!runs/segment/runs/ped_smoke/weights/best.pt
 
 # Data (large; user supplies)
 data/cityscapes/
