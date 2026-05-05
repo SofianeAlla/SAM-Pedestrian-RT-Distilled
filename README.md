@@ -1,9 +1,10 @@
 # SAM 3 Pedestrian — Real-time distillation reference implementation
 
 A reproducible, end-to-end recipe for distilling Meta's
-[SAM 3](https://github.com/facebookresearch/sam3) into real-time
-on-device perception models for the **pedestrian** class. Built and
-verified on a single consumer NVIDIA laptop GPU (RTX 4070, 8 GB).
+[SAM 3](https://github.com/facebookresearch/sam3) into both a
+**real-time on-device 2D segmenter** and a **lidar-native 3D
+pedestrian supervisor** for AV-style perception. Built and verified
+on a single consumer NVIDIA laptop GPU (RTX 4070, 8 GB).
 
 This repository is a **public reference implementation** for engineers
 wiring SAM 3 (or any concept-prompted 2D foundation model) into their
@@ -14,64 +15,113 @@ clones the same recipe, so adding experts does not scale runtime cost.
 EMC2 (ICCV 2025) is the closest published prior art for the
 scenario-aware MoE-on-edge pattern.
 
-## Phases
+## Headline results
 
-- **Phase 1 — 2D camera distillation (shipped)**: SAM 3 →
-  YOLOv8n-Seg student, real-time on consumer GPU. Includes a v1→v2
-  redesign in the commit history that fixes a data-leakage trap (the
-  v1 pipeline trained on frames that were also used in the demo
-  evaluation; v2 separates train/val/demo into disjoint sources).
-- **Phase 2 — 3D supervision via 2D oracle (in progress)**: SAM 3 over
-  the 6 nuScenes cameras → camera-lidar projection → multi-view
-  consensus → per-point 3D pedestrian pseudo-labels → optional
-  PointPillars student. Plan in
-  [`docs/PHASE_2_PLAN.md`](docs/PHASE_2_PLAN.md), results in
-  [`docs/RESULTS_PHASE_2.md`](docs/RESULTS_PHASE_2.md).
+### Phase 2 — SAM 3 as 2D oracle for 3D pedestrian supervision (nuScenes mini)
 
----
+Point-level agreement of SAM-3-derived lidar pseudo-labels vs nuScenes
+3D pedestrian box ground truth, **92 keyframes, 3.2 M lidar points,
+zero human 3D labels used during pseudo-labeling**:
+
+| | precision | recall | F1 |
+|---|:-:|:-:|:-:|
+| **Overall** | **0.685** | **0.654** | **0.669** |
+| 0–15 m  | 0.83 | 0.70 | 0.76 |
+| 15–30 m | 0.55 | 0.65 | 0.59 |
+| 30+ m   | 0.34 | 0.35 | 0.34 |
+
+**Named failure mode** — by camera coverage (how many of 6 cameras saw each lidar point):
+
+| coverage | n points | F1 | comment |
+|---|---:|:-:|---|
+| 0 cams | 3,176,003 | 0.00 | lift physically cannot fire — sensor blind spot |
+| 1 cam  | 16,954    | 0.79 | single-view supervision |
+| 2 cams | 1,091     | 0.86 | multi-view consensus pays off |
+
+**5,433 of 17,135 GT pedestrian points (31.7 %) sit in the union of
+the under-vehicle blind spot and points outside every camera frustum
+at the keyframe instant.** The lift cannot fire on those by
+construction — this single sensor-config story accounts for the
+entire gap between 0.65 overall recall and 0.96 recall on
+camera-visible points.
+
+Full writeup: [`docs/RESULTS_PHASE_2.md`](docs/RESULTS_PHASE_2.md).
+Plan: [`docs/PHASE_2_PLAN.md`](docs/PHASE_2_PLAN.md).
+Run end-to-end with `bash scripts/run_phase2.sh`.
+
+### Phase 1 — SAM 3 → YOLOv8n-Seg edge student (Intel sample-videos)
+
+Real-time 2D camera-only pedestrian detection + segmentation on the
+held-out Intel `person-bicycle-car-detection.mp4` clip, 647 frames,
+RTX 4070 FP16, conf=0.25:
+
+| Demo | Weights / Training | Mean inf | FPS | Ped detections |
+|---|---|---:|---:|---:|
+| `demo_baseline.mp4` | `yolov8n-seg.pt` — COCO out-of-the-box | 16.5 ms | 50.5 | 193 / 647 |
+| `demo_smoke.mp4` | 35 SAM 3 labels, `single_cls=True` (head reset) | 15.4 ms | 56.0 | 5 / 647 |
+| `demo_1h.mp4` | **500 COCO val2017 person images SAM-3-relabeled, 38 epochs frozen backbone, AdamW lr0=0.001, 80 COCO names retained** | 37.7 ms | 22.0 | **233 / 647** |
+
+`demo_1h.mp4` finds **+21 % more pedestrians than the COCO baseline
+on a video the student has never seen** (data hygiene: train on COCO,
+demo on Intel — zero overlap). Full Phase 1 detail in the section
+below.
+
+## Artifacts on this repo
+
+Phase 2:
+- [`outputs/demo_3d.mp4`](outputs/demo_3d.mp4) — rotating-BEV flythrough on a real keyframe
+- [`outputs/demo_3d_panel.png`](outputs/demo_3d_panel.png) — front cam + SAM 3 mask + lidar BEV with pseudo-labels and GT 3D boxes
+- [`outputs/labeling_agreement.png`](outputs/labeling_agreement.png) — per-distance P/R/F1
+- [`outputs/failure_mode_coverage.png`](outputs/failure_mode_coverage.png) — F1 by camera-coverage bin (the named failure mode)
+- [`outputs/failure_mode_confidence.png`](outputs/failure_mode_confidence.png) — TP/FP confidence histograms
+- [`outputs/labeling_agreement.json`](outputs/labeling_agreement.json), [`outputs/failure_mode.json`](outputs/failure_mode.json) — raw numbers
+
+Phase 1:
+- [`outputs/demo_baseline.mp4`](outputs/demo_baseline.mp4), [`outputs/demo_smoke.mp4`](outputs/demo_smoke.mp4), [`outputs/demo_1h.mp4`](outputs/demo_1h.mp4)
+- Training run artifacts under [`runs/segment/runs/ped_smoke/`](runs/segment/runs/ped_smoke/) and [`runs/segment/runs/ped_1h/`](runs/segment/runs/ped_1h/)
 
 ## What's in here
 
 ```
 docs/
-  PHASE_2_PLAN.md            3D supervision via 2D oracle on nuScenes
-  RESULTS_PHASE_2.md         Numbers + named failure mode
+  PHASE_2_PLAN.md              3D supervision via 2D oracle on nuScenes
+  RESULTS_PHASE_2.md           Numbers + named failure mode
 
 # Phase 1 — 2D camera distillation
 teacher/
-  sam3_autolabel.py          SAM 3 → YOLO-Seg pseudo-labels
-  pseudolabel_filter.py      Drop pedestrian-on-bicycle false positives
-  carla_synth.py             CARLA pedestrian capture (optional)
+  sam3_autolabel.py            SAM 3 → YOLO-Seg pseudo-labels
+  pseudolabel_filter.py        Drop pedestrian-on-bicycle false positives
+  carla_synth.py               CARLA pedestrian capture (optional)
 distill/
-  configs/ped_yolov8n.yaml   Training config
-  train.py                   YOLOv8n-Seg fine-tune on SAM 3 labels
+  configs/ped_yolov8n.yaml     Training config
+  train.py                     YOLOv8n-Seg fine-tune on SAM 3 labels
 runtime/
-  pedestrian_expert.py       Inference wrapper + Expert plugin contract
-  export_onnx.py             PyTorch → ONNX
-  build_trt.py               ONNX → desktop TensorRT engine
-  demo_live.py               Video / webcam → annotated MP4
+  pedestrian_expert.py         Inference wrapper + Expert plugin contract
+  export_onnx.py               PyTorch → ONNX
+  build_trt.py                 ONNX → desktop TensorRT engine
+  demo_live.py                 Video / webcam → annotated MP4
 eval/
-  benchmark.py               Latency + throughput on local GPU
+  benchmark.py                 Latency + throughput on local GPU
 scripts/
-  setup.sh                   Install + sanity check
-  fetch_sample_video.py      Pull a CC sample driving video
-  build_coco_person_subset.py
-  build_distill_dataset.py
-  run_smoke.sh               Tiny end-to-end run (~30-60 min)
-  run_1h_v2.sh               Diversified ~1 h training run
-  run_full.sh                Overnight full corpus + epochs
+  setup.sh                     Install + sanity check
+  fetch_sample_video.py        Pull a CC sample driving video
+  build_coco_person_subset.py  COCO val2017 → person-only training subset
+  build_distill_dataset.py     Two SAM 3 outputs → canonical YOLO dataset
+  run_smoke.sh                 Tiny end-to-end run (~30-60 min)
+  run_1h_v2.sh                 Diversified ~1 h training run
+  run_full.sh                  Overnight full corpus + epochs
 
-# Phase 2 — 3D supervision via 2D oracle (nuScenes mini)
+# Phase 2 — SAM 3 as 2D oracle for 3D pedestrian supervision
 teacher/
-  nuscenes_sam3_oracle.py    SAM 3 over the 6 nuScenes cameras (Stage A)
-  lidar_lift.py              Project masks onto lidar points (Stage B)
+  nuscenes_sam3_oracle.py      SAM 3 over the 6 nuScenes cameras (Stage A)
+  lidar_lift.py                Project masks onto lidar points (Stage B)
 eval/
-  labeling_agreement.py      Point-level P/R/F1 vs nuScenes GT (Stage E)
-  viz_3d.py                  3-panel viz + rotating BEV flythrough (Stage F)
-  failure_mode.py            By-camera-coverage + confidence breakdown (Stage G)
+  labeling_agreement.py        Point-level P/R/F1 vs nuScenes GT (Stage E)
+  viz_3d.py                    3-panel viz + rotating BEV flythrough (Stage F)
+  failure_mode.py              By-camera-coverage + confidence breakdown (Stage G)
 scripts/
-  fetch_nuscenes_mini.py     One-time nuScenes mini downloader
-  run_phase2.sh              End-to-end Phase 2 orchestrator
+  fetch_nuscenes_mini.py       One-time nuScenes mini downloader (~4 GB)
+  run_phase2.sh                End-to-end Phase 2 orchestrator
 ```
 
 ## Setup
@@ -95,85 +145,67 @@ PYTHONPATH=$PWD python -m runtime.demo_live \
 ```
 
 Produces a working pedestrian video using YOLOv8n-Seg's COCO-pretrained
-"person" class. **This is the baseline.** SAM 3 distillation refines
-mask quality and long-tail recall on top of this.
+"person" class — the reference baseline before any distillation.
 
-## Smoke test (after HF login)
-
-1. Drop ~50-200 driving images into `data/seed_images/`.
-   (Cityscapes val, BDD subset, or anything you have handy.)
-2. `bash scripts/run_smoke.sh`
-
-Expect ~30-60 minutes on the 4070 to:
-SAM 3 pseudo-label → filter → fine-tune YOLOv8n-Seg →
-write `outputs/demo_smoke.mp4`.
-
-## Full overnight run
+## Phase 2 end-to-end (3D pseudo-labels on nuScenes mini)
 
 ```bash
-# Populate ~10K-20K images first, optionally include CARLA-synthesized.
+huggingface-cli login                  # one-time
+bash scripts/run_phase2.sh             # ~75 min on RTX 4070 (subset),
+                                       # ~3 h for full nuScenes mini
+```
+
+Stages, all driven by the orchestrator:
+
+```
+A. SAM 3 over the 6 nuScenes cameras of every keyframe
+B. Lidar-camera projection + multi-view consensus → per-point labels
+E. Point-level precision/recall/F1 vs nuScenes 3D pedestrian box GT
+F. 3-panel viz + 13 MB rotating-BEV flythrough video
+G. Failure-mode plot: F1 by camera coverage + confidence histograms
+```
+
+## Phase 1 end-to-end (2D camera distillation)
+
+```bash
+# Smoke (a few hundred images, ~30-60 min)
+bash scripts/run_smoke.sh
+
+# Diversified 1 h run on COCO val2017 person subset (the demo_1h.mp4
+# numbers above)
+bash scripts/run_1h_v2.sh
+
+# Overnight full corpus + epochs
 bash scripts/run_full.sh
 ```
 
-100 epochs, larger batch, ONNX export, desktop TensorRT build,
-benchmark + final `outputs/demo_full.mp4`.
+The Phase 1 trainer initializes from `yolov8n-seg.pt` (COCO-pretrained)
+and writes the SAM-3-finetuned student to a `runs/.../weights/best.pt`,
+plus an annotated demo MP4 of the student running on a held-out video.
 
-## One-paragraph summary (presentation copy)
+## Phase 1 details — validation metrics on held-out COCO split (50 images, never seen during training)
 
-**SAM 3-distilled real-time pedestrian expert.** A working desktop-edge
-pedestrian detector + segmenter, distilled from Meta's SAM 3 (840M-param
-concept-prompted teacher), built as expert #1 of a future Mixture-of-
-Experts foundation perception model for autonomous-vehicle vision. The
-pipeline runs entirely on a single RTX 4070 Laptop (8 GB): SAM 3
-generates pseudo-labels with person-on-foot text prompts (negatively
-prompted against cyclists/scooters/wheelchairs to keep the future MoE
-class boundary clean); a YOLOv8n-Seg student is fine-tuned on those
-labels and exported to TensorRT. End-to-end real-time inference on a
-647-frame driving video clocks in at **56 FPS / 15.4 ms mean inference
-latency** (det + seg head, FP16, single front camera, 768×432 input).
-The architecture follows EMC2 (ICCV 2025) — backbone outputs a shared
-P3/P4/P5 feature pyramid and the student is a class-specialized head,
-so adding the next expert (vehicles, signs, lanes) is a head + a SAM 3
-prompt set rather than a rewrite, and runtime cost stays cheap as the
-expert pool grows under sparse top-k routing.
+| Metric         | Box   | Mask  |
+|----------------|:-----:|:-----:|
+| Precision      | 0.83  | 0.82  |
+| Recall         | 0.70  | 0.74  |
+| mAP@0.5        | 0.73  | 0.77  |
+| mAP@0.5:0.95   | 0.53  | 0.52  |
 
-## Performance
+**Data hygiene matters.** The `demo_1h.mp4` student was trained on
+COCO val2017 person images and demoed on Intel sample-videos — zero
+overlap between training, validation, and the demo footage. The
+`demo_smoke.mp4` is kept as historical context: trained on 35 SAM 3
+pseudo-labels with `single_cls=True`, which resets the YOLOv8n-Seg
+head and destroys COCO's pretrained person prior; included so the
+v1→v2 fix is visible in the commit history.
 
-Held-out demo video: `person-bicycle-car-detection.mp4` (Intel sample-
-videos), 647 frames, 768×432, RTX 4070 Laptop, FP16, single front
-camera, det + seg, conf=0.25.
-
-| Demo                | Weights / Training                                                                 | Mean inf  | FPS   | Pedestrian dets | Notes                                              |
-|---------------------|------------------------------------------------------------------------------------|-----------|-------|-----------------|----------------------------------------------------|
-| `demo_baseline.mp4` | `yolov8n-seg.pt` — COCO out-of-the-box                                             | 16.5 ms   | 50.5  | 193 / 647       | Reference baseline                                 |
-| `demo_smoke.mp4`    | `runs/.../ped_smoke/weights/best.pt` — 35 SAM 3 labels, single_cls reset           | 15.4 ms   | 56.0  | 5 / 647         | Pipeline validation only — head reset killed quality |
-| `demo_1h.mp4`       | `runs/.../ped_1h/weights/best.pt` — **500 COCO val2017 person images, SAM 3 labels, 38 epochs (early-stopped via patience=15), frozen backbone, AdamW lr0=0.001, all 80 COCO names retained** | 37.7 ms | 22.0  | **233 / 647**   | **+21 % more pedestrians than baseline on a video the student has never seen** |
-
-**Validation metrics** (50-image held-out COCO split, never seen during training):
-
-| Metric           | Box     | Mask    |
-|------------------|---------|---------|
-| Precision        | 0.83    | 0.82    |
-| Recall           | 0.70    | 0.74    |
-| mAP@0.5          | 0.73    | 0.77    |
-| mAP@0.5:0.95     | 0.53    | 0.52    |
-
-**Data hygiene matters.** `demo_1h.mp4` is the proper distillation result:
-the student was trained on COCO val2017 person images and benchmarked
-on Intel sample-videos — **zero overlap** between training, validation,
-and the demo footage. The `demo_smoke.mp4` is kept as historical
-context: trained on 35 SAM 3 pseudo-labels with `single_cls=True`,
-which resets the YOLOv8n-Seg head and destroys COCO's pretrained
-person prior. The 1 h run fixes both issues — diversified training
-corpus + 80 COCO class names retained in the dataset YAML so only
-class 0 (person) carries gradient.
-
-**Latency note.** v2 is slower per frame than the smoke run (37.7 ms
-vs 15.4 ms) because the head retains all 80 COCO classes — more raw
-NMS candidates per anchor at the same confidence threshold. Still
-real-time at 22 FPS on a single laptop GPU. Switching back to a
-single-class head after distillation, or raising `conf`, recovers the
-50+ FPS regime trivially.
+**Latency note.** The 1 h run is slower per frame than the smoke run
+(37.7 ms vs 15.4 ms) because its head retains all 80 COCO classes —
+more raw NMS candidates per anchor at the same confidence threshold.
+Still real-time at 22 FPS on a single laptop GPU. Collapsing back to
+a single-class head post-distillation, or raising `conf`, recovers
+the 50+ FPS regime trivially.
 
 ## Architectural commitments worth keeping
 
@@ -182,27 +214,42 @@ single-class head after distillation, or raising `conf`, recovers the
    integration surface for future experts. Don't fuse class-specific
    computation into the backbone.
 
-2. **Single class today, copy-paste tomorrow.** Adding cyclists, vehicles,
-   signs is a new head + a new SAM 3 prompt set + a new YAML — the
-   training pipeline doesn't change.
+2. **Single class today, copy-paste tomorrow.** Adding cyclists,
+   vehicles, signs is a new head + a new SAM 3 prompt set + a new
+   YAML — the training pipeline doesn't change.
 
 3. **Negative prompts matter.** The pedestrian expert is explicitly
-   negative-prompted against cyclists and scooter riders so its training
-   set doesn't pollute the future cyclist expert. The post-hoc filter in
-   `teacher/pseudolabel_filter.py` belt-and-suspenders this.
+   negative-prompted against cyclists and scooter riders so its
+   training set doesn't pollute the future cyclist expert. The
+   post-hoc filter in `teacher/pseudolabel_filter.py`
+   belt-and-suspenders this.
 
-## Out of scope (intentional)
+4. **Use the foundation model offline as a teacher, not online as an
+   oracle.** SAM 3 itself runs at ~1.5 s/image on this hardware — the
+   point of the whole recipe is to push that cost offline so an
+   on-vehicle or on-edge student doesn't pay it at inference time.
 
+## Out of scope (intentional, named follow-ups)
+
+- **PointPillars 3D detector** distilled on the Phase 2 pseudo-labels.
+  Phase 2 currently produces the supervision; the lidar-native student
+  is the natural next phase.
+- **Temporal aggregation** across ±N keyframes to recover the
+  camera-blind GT points (the named failure mode above).
+- **SAM 3 vs SAM 2 vs GroundingDINO+SAM ablation.** This is the
+  natural paper-grade follow-up; the present repo is intentionally a
+  single-pipeline reference, not a comparison study.
 - **Orin AGX port.** Same code paths apply; needs the device for INT8
-  calibration and trtexec on the Jetson. Add `runtime/build_trt.py`
-  invocation on the Orin.
-- **MoE router.** `runtime/router/` is reserved; lands when expert #2
-  exists.
-- **Multi-camera batching, sensor fusion, tracking.** Phase 3+.
+  calibration and `trtexec` on the Jetson.
+- **MoE router and second expert** (vehicle / cyclist / sign).
+- **Multi-camera batching, sensor fusion, tracking.**
 
 ## References
 
 - SAM 3: <https://github.com/facebookresearch/sam3>
+- nuScenes: <https://www.nuscenes.org>
 - Ultralytics YOLOv8: <https://docs.ultralytics.com/>
-- EMC2 (scenario-aware MoE for edge AV, ICCV 2025):
+- EMC2 — scenario-aware MoE for edge AV, ICCV 2025:
   <https://openaccess.thecvf.com/content/ICCV2025/papers/Liu_Towards_Accurate_and_Efficient_3D_Object_Detection_for_Autonomous_Driving_ICCV_2025_paper.pdf>
+- Adjacent prior art on foundation-model-supervised 3D perception:
+  Seal (CVPR 2024), OpenMask3D, OV-3DET, SAMesh.
