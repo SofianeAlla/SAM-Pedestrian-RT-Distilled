@@ -12,6 +12,16 @@ tiny edge student, shared backbone — so that runtime cost stays cheap
 as the expert pool grows. EMC2 (ICCV 2025) is the closest published
 prior art for the scenario-aware MoE-on-edge pattern.
 
+## Status
+
+- **Phase 1 (shipped)**: 2D camera-only pedestrian detector +
+  segmenter, distilled from SAM 3. v1→v2 redesign in commit history.
+- **Phase 2 (in progress)**: SAM 3 as 2D oracle → 3D pedestrian
+  supervision on nuScenes mini → PointPillars student. Locked plan in
+  [`docs/PHASE_2_PLAN.md`](docs/PHASE_2_PLAN.md). Project moved off
+  OneDrive to `C:\dev\SAM-Pedestrian-RT-Distilled\` so checkpoint
+  writes don't fight a sync daemon.
+
 ---
 
 ## What's in here
