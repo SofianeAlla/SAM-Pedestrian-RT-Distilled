@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# Models / weights / engines (large binaries)
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+*.bin
+*.safetensors
+checkpoints/
+weights/
+
+# Data (large; user supplies)
+data/cityscapes/
+data/bdd100k/
+data/eurocity/
+data/nightowls/
+data/crowdhuman/
+data/carla_synth/
+data/seed_images/*.jpg
+data/seed_images/*.png
+data/seed_images/*.jpeg
+data/pseudo_labels/
+
+# Outputs (intermediate results, not demos — demos are deliverables)
+outputs/*.npy
+outputs/runs/
+# Demo videos ARE deliverables; keep them in git despite mp4 size.
+!outputs/demo_baseline.mp4
+!outputs/demo_smoke.mp4
+!outputs/demo_full.mp4
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local

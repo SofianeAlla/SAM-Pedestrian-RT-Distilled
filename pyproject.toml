@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pedestrian-expert"
+version = "0.0.1"
+description = "SAM 3-distilled real-time pedestrian detector/segmenter — expert #1 of a future MoE foundation perception model."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "opencv-python>=4.8",
+  "Pillow>=10.0",
+  "torch>=2.5",
+  "torchvision",
+  "ultralytics>=8.3",
+  "tqdm",
+  "pyyaml",
+  "matplotlib",
+]
+
+[project.optional-dependencies]
+sam3 = [
+  "transformers>=4.46",
+  "accelerate",
+]
+trt = [
+  "onnx>=1.16",
+  "onnxruntime-gpu",
+  # "tensorrt"  # install separately on Windows; pip wheel can be flaky
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["teacher*", "distill*", "runtime*", "eval*"]

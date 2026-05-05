@@ -1,0 +1,36 @@
+# Distillation training config for the pedestrian expert.
+# Consumed by distill/train.py — Ultralytics YOLOv8 trainer driver.
+
+# Path to the dataset YAML emitted by teacher/sam3_autolabel.py.
+dataset_yaml: "data/pseudo_labels/dataset.yaml"
+
+# Initialize from pretrained YOLOv8n-Seg COCO checkpoint. This bootstraps
+# 'person' class knowledge so the smoke-test demo is visibly working
+# even on tiny pseudo-label sets; SAM 3 pseudo-labels then refine
+# pedestrian-specific mask quality.
+init_weights: "yolov8n-seg.pt"
+
+# Output run directory.
+project: "runs"
+run_name: "ped_smoke"
+
+# Single-class head.
+single_cls: true
+
+# Training hyperparams — tuned for an 8 GB 4070 Laptop. Override on
+# overnight full-corpus training (run_full.sh sets epochs higher).
+epochs: 10
+batch: 8
+imgsz: 640
+device: 0
+amp: true
+patience: 5
+optimizer: "auto"
+lr0: 0.001
+lrf: 0.01
+warmup_epochs: 1.0
+mosaic: 0.5     # lighter aug for small dataset; full training can raise
+close_mosaic: 5
+val: true
+save_period: 5
+workers: 0      # Windows-friendly; set higher on Linux
